@@ -1,0 +1,40 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.x"
+      - run: ./scripts/build-release.sh "${GITHUB_REF_NAME}"
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
+            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes "Release ${GITHUB_REF_NAME}"
+          gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+
+  claude-desktop:
+    needs: binaries
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.x"
+      - run: ./scripts/build-claude-desktop-mcpb.sh "${GITHUB_REF_NAME}"
+      - name: Upload Claude Desktop MCPB
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" dist/paynow-mcp_claude-desktop.mcpb --clobber

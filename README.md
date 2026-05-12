@@ -9,10 +9,34 @@ This project intentionally has no npm dependency and no third-party Go runtime d
 - Store management: list, get, create, update, and delete stores.
 - Products, coupons, customers, orders, payments, subscriptions, webhooks, and game server tools.
 - Checkout session creation.
+- Multi-profile support for multiple stores or API keys in one MCP server.
+- Optional `PAYNOW_STORE_ID` or per-profile `store_id` so store-scoped tools can omit `store_id`.
+- Generated tools from PayNow's bundled OpenAPI specs. Management API tools are enabled by default; Storefront and Game Server APIs are opt-in.
 - Guarded destructive operations: deletes, refunds, subscription cancellation, and game server token resets require `confirm=true`.
 - `paynow_api_request` for any PayNow Management API path that does not have a dedicated tool yet.
 
 ## Install
+
+Fast client setup:
+
+- Claude Desktop: download `paynow-mcp_claude-desktop.mcpb` from the [latest release](https://github.com/bridgelol/paynow-mcp/releases/latest) and open it.
+- Claude Code:
+
+  ```sh
+  export PAYNOW_API_KEY="APIKey your_token_here"
+  curl -fsSL https://raw.githubusercontent.com/bridgelol/paynow-mcp/main/scripts/install-claude-code.sh | bash
+  ```
+
+- Codex:
+
+  ```sh
+  export PAYNOW_API_KEY="APIKey your_token_here"
+  curl -fsSL https://raw.githubusercontent.com/bridgelol/paynow-mcp/main/scripts/install-codex.sh | bash
+  ```
+
+See [docs/INSTALL.md](docs/INSTALL.md) for manual config snippets and installer options.
+
+Developer install:
 
 ```sh
 go install github.com/bridgelol/paynow-mcp/cmd/paynow-mcp@latest
@@ -42,7 +66,31 @@ Optional environment variables:
 | --- | --- | --- |
 | `PAYNOW_BASE_URL` | `https://api.paynow.gg` | PayNow API base URL. |
 | `PAYNOW_AUTH_PREFIX` | `APIKey` | Authorization prefix used when `PAYNOW_API_KEY` is a raw token. |
+| `PAYNOW_AUTH_KIND` | `apikey` | Convenience auth kind for raw tokens: `apikey`, `customer`, or `gameserver`. |
+| `PAYNOW_STORE_ID` | none | Default store ID for store-scoped tools. |
+| `PAYNOW_PROFILES` | none | JSON object of named profiles for multiple stores or API keys. |
+| `PAYNOW_DEFAULT_PROFILE` | `default` or first profile | Default profile name. |
+| `PAYNOW_INCLUDE_APIS` | `management` | Comma-separated OpenAPI toolsets: `management`, `storefront`, `gameserver`; use `none` to disable generated tools. |
+| `PAYNOW_OPENAPI_TOOLS` | enabled | Set to `false` to disable generated OpenAPI tools. |
 | `PAYNOW_TIMEOUT_SECONDS` | `30` | HTTP request timeout. |
+
+Multi-profile example:
+
+```sh
+export PAYNOW_PROFILES='{
+  "prod": {
+    "api_key": "APIKey prod_token_here",
+    "store_id": "prod_store_id"
+  },
+  "staging": {
+    "api_key": "APIKey staging_token_here",
+    "store_id": "123"
+  }
+}'
+export PAYNOW_DEFAULT_PROFILE=prod
+```
+
+Then pass `"profile": "staging"` to any tool to target that profile.
 
 ## MCP Client Setup
 
@@ -122,6 +170,7 @@ go run ./cmd/paynow-mcp
 Manual MCP smoke test:
 
 ```sh
+export PAYNOW_API_KEY="APIKey your_token_here"
 printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"manual","version":"0"}}}' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
@@ -133,3 +182,5 @@ printf '%s\n' \
 - PayNow docs: <https://docs.paynow.gg/>
 - PayNow OpenAPI specifications: <https://github.com/paynow-gg/openapi>
 - MCP specification: <https://modelcontextprotocol.io/specification/2025-11-25/schema>
+- Claude MCPB docs: <https://claude.com/docs/connectors/building/mcpb>
+- Codex MCP docs: <https://developers.openai.com/codex/cli/reference#codex-mcp>

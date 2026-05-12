@@ -10,14 +10,15 @@ import (
 )
 
 type toolBuilder struct {
-	client *Client
+	registry *Registry
 }
 
-func Tools(client *Client) []mcp.Tool {
-	builder := toolBuilder{client: client}
+func Tools(registry *Registry) []mcp.Tool {
+	builder := toolBuilder{registry: registry}
 
-	return []mcp.Tool{
+	tools := []mcp.Tool{
 		builder.help(),
+		builder.listProfiles(),
 		builder.apiRequest(),
 		builder.listStores(),
 		builder.getStore(),
@@ -67,6 +68,9 @@ func Tools(client *Client) []mcp.Tool {
 		builder.deleteGameServer(),
 		builder.resetGameServerToken(),
 	}
+
+	tools = append(tools, OpenAPITools(registry)...)
+	return tools
 }
 
 func (b toolBuilder) help() mcp.Tool {
@@ -79,6 +83,7 @@ func (b toolBuilder) help() mcp.Tool {
 			return mcp.NewToolResult(map[string]any{
 				"authentication": "Set PAYNOW_API_KEY to a PayNow Management API key. Raw tokens are sent as 'APIKey <token>'; a value that already contains a space is sent as-is.",
 				"base_url":       "Set PAYNOW_BASE_URL to override the default https://api.paynow.gg.",
+				"profiles":       "Set PAYNOW_PROFILES to a JSON object and pass profile to tools to switch stores or API keys. Set PAYNOW_STORE_ID or profile store_id so store-scoped tools can omit store_id.",
 				"destructive_operations": []string{
 					"DELETE requests require confirm=true.",
 					"Refunds, subscription cancellation, and game server token resets require confirm=true.",
@@ -93,6 +98,20 @@ func (b toolBuilder) help() mcp.Tool {
 					"GET /v1/stores/{storeId}/webhooks",
 				},
 				"raw_access": "Use paynow_api_request for PayNow Management API endpoints that do not have a dedicated MCP tool yet.",
+			}), nil
+		},
+	}
+}
+
+func (b toolBuilder) listProfiles() mcp.Tool {
+	return mcp.Tool{
+		Name:        "paynow_list_profiles",
+		Title:       "List profiles",
+		Description: "List configured PayNow profiles and default store IDs.",
+		InputSchema: emptySchema(),
+		Handler: func(context.Context, map[string]any) (mcp.CallToolResult, error) {
+			return mcp.NewToolResult(map[string]any{
+				"profiles": b.registry.Summaries(),
 			}), nil
 		},
 	}
@@ -135,7 +154,12 @@ func (b toolBuilder) apiRequest() mcp.Tool {
 				return mcp.CallToolResult{}, err
 			}
 
-			return b.call(ctx, method, path, query, args["body"])
+			profile, err := b.profile(args)
+			if err != nil {
+				return mcp.CallToolResult{}, err
+			}
+
+			return b.call(ctx, profile, method, path, query, args["body"])
 		},
 	}
 }
@@ -146,7 +170,11 @@ func (b toolBuilder) listStores() mcp.Tool {
 
 func (b toolBuilder) getStore() mcp.Tool {
 	return b.idTool("paynow_get_store", "Get store", "Get a PayNow store by ID.", "store_id", func(args map[string]any) (string, error) {
-		storeID, err := requiredString(args, "store_id")
+		profile, err := b.profile(args)
+		if err != nil {
+			return "", err
+		}
+		storeID, err := b.storeID(args, profile)
 		return "/v1/stores/" + escape(storeID), err
 	})
 }
@@ -250,12 +278,16 @@ func (b toolBuilder) lookupCustomer() mcp.Tool {
 		Name:        "paynow_lookup_customer",
 		Title:       "Lookup customer",
 		Description: "Look up a customer with PayNow query parameters such as email or external identifiers.",
-		InputSchema: objectSchema([]string{"store_id", "query"}, map[string]any{
-			"store_id": stringProperty("PayNow store ID."),
+		InputSchema: objectSchema([]string{"query"}, map[string]any{
+			"store_id": stringProperty("PayNow store ID. Optional if the selected profile has store_id."),
 			"query":    queryProperty(),
 		}),
 		Handler: func(ctx context.Context, args map[string]any) (mcp.CallToolResult, error) {
-			storeID, err := requiredString(args, "store_id")
+			profile, err := b.profile(args)
+			if err != nil {
+				return mcp.CallToolResult{}, err
+			}
+			storeID, err := b.storeID(args, profile)
 			if err != nil {
 				return mcp.CallToolResult{}, err
 			}
@@ -263,7 +295,7 @@ func (b toolBuilder) lookupCustomer() mcp.Tool {
 			if err != nil {
 				return mcp.CallToolResult{}, err
 			}
-			return b.call(ctx, "GET", "/v1/stores/"+escape(storeID)+"/customers/lookup", query, nil)
+			return b.call(ctx, profile, "GET", "/v1/stores/"+escape(storeID)+"/customers/lookup", query, nil)
 		},
 	}
 }
@@ -315,8 +347,8 @@ func (b toolBuilder) refundOrder() mcp.Tool {
 		Name:        "paynow_refund_order",
 		Title:       "Refund order",
 		Description: "Refund an order. Body fields must match the PayNow CreateRefundRequestDto. Requires confirm=true.",
-		InputSchema: objectSchema([]string{"store_id", "order_id", "body", "confirm"}, map[string]any{
-			"store_id": stringProperty("PayNow store ID."),
+		InputSchema: objectSchema([]string{"order_id", "body", "confirm"}, map[string]any{
+			"store_id": stringProperty("PayNow store ID. Optional if the selected profile has store_id."),
 			"order_id": stringProperty("Order ID."),
 			"body":     bodyProperty("Refund request body."),
 			"confirm":  boolProperty("Must be true to refund the order."),
@@ -325,7 +357,11 @@ func (b toolBuilder) refundOrder() mcp.Tool {
 			if err := requireConfirm(args, "confirm", "refund order"); err != nil {
 				return mcp.CallToolResult{}, err
 			}
-			storeID, orderID, err := requiredStoreChild(args, "order_id")
+			profile, err := b.profile(args)
+			if err != nil {
+				return mcp.CallToolResult{}, err
+			}
+			storeID, orderID, err := b.storeChild(args, profile, "order_id")
 			if err != nil {
 				return mcp.CallToolResult{}, err
 			}
@@ -333,7 +369,7 @@ func (b toolBuilder) refundOrder() mcp.Tool {
 			if err != nil {
 				return mcp.CallToolResult{}, err
 			}
-			return b.call(ctx, "POST", "/v1/stores/"+escape(storeID)+"/orders/"+escape(orderID)+"/refund", nil, body)
+			return b.call(ctx, profile, "POST", "/v1/stores/"+escape(storeID)+"/orders/"+escape(orderID)+"/refund", nil, body)
 		},
 	}
 }
@@ -471,17 +507,26 @@ func (b toolBuilder) simpleListTool(name, title, description, path string) mcp.T
 			if err != nil {
 				return mcp.CallToolResult{}, err
 			}
-			return b.call(ctx, "GET", path, query, nil)
+			profile, err := b.profile(args)
+			if err != nil {
+				return mcp.CallToolResult{}, err
+			}
+			return b.call(ctx, profile, "GET", path, query, nil)
 		},
 	}
 }
 
 func (b toolBuilder) idTool(name, title, description, idField string, path func(map[string]any) (string, error)) mcp.Tool {
+	required := []string{idField}
+	if idField == "store_id" {
+		required = nil
+	}
+
 	return mcp.Tool{
 		Name:        name,
 		Title:       title,
 		Description: description,
-		InputSchema: objectSchema([]string{idField}, map[string]any{
+		InputSchema: objectSchema(required, map[string]any{
 			idField: stringProperty("PayNow " + strings.ReplaceAll(idField, "_", " ") + "."),
 			"query": queryProperty(),
 		}),
@@ -494,7 +539,11 @@ func (b toolBuilder) idTool(name, title, description, idField string, path func(
 			if err != nil {
 				return mcp.CallToolResult{}, err
 			}
-			return b.call(ctx, "GET", resolvedPath, query, nil)
+			profile, err := b.profile(args)
+			if err != nil {
+				return mcp.CallToolResult{}, err
+			}
+			return b.call(ctx, profile, "GET", resolvedPath, query, nil)
 		},
 	}
 }
@@ -517,7 +566,11 @@ func (b toolBuilder) bodyTool(name, title, description, method, path string, ext
 			if err != nil {
 				return mcp.CallToolResult{}, err
 			}
-			return b.call(ctx, method, path, nil, body)
+			profile, err := b.profile(args)
+			if err != nil {
+				return mcp.CallToolResult{}, err
+			}
+			return b.call(ctx, profile, method, path, nil, body)
 		},
 	}
 }
@@ -527,12 +580,16 @@ func (b toolBuilder) storeListTool(name, title, description string, path func(st
 		Name:        name,
 		Title:       title,
 		Description: description,
-		InputSchema: objectSchema([]string{"store_id"}, map[string]any{
-			"store_id": stringProperty("PayNow store ID."),
+		InputSchema: objectSchema(nil, map[string]any{
+			"store_id": stringProperty("PayNow store ID. Optional if the selected profile has store_id."),
 			"query":    queryProperty(),
 		}),
 		Handler: func(ctx context.Context, args map[string]any) (mcp.CallToolResult, error) {
-			storeID, err := requiredString(args, "store_id")
+			profile, err := b.profile(args)
+			if err != nil {
+				return mcp.CallToolResult{}, err
+			}
+			storeID, err := b.storeID(args, profile)
 			if err != nil {
 				return mcp.CallToolResult{}, err
 			}
@@ -540,7 +597,7 @@ func (b toolBuilder) storeListTool(name, title, description string, path func(st
 			if err != nil {
 				return mcp.CallToolResult{}, err
 			}
-			return b.call(ctx, "GET", path(storeID), query, nil)
+			return b.call(ctx, profile, "GET", path(storeID), query, nil)
 		},
 	}
 }
@@ -550,13 +607,17 @@ func (b toolBuilder) storeChildListTool(name, title, description, childField str
 		Name:        name,
 		Title:       title,
 		Description: description,
-		InputSchema: objectSchema([]string{"store_id", childField}, map[string]any{
-			"store_id": stringProperty("PayNow store ID."),
+		InputSchema: objectSchema([]string{childField}, map[string]any{
+			"store_id": stringProperty("PayNow store ID. Optional if the selected profile has store_id."),
 			childField: stringProperty("PayNow " + strings.ReplaceAll(childField, "_", " ") + "."),
 			"query":    queryProperty(),
 		}),
 		Handler: func(ctx context.Context, args map[string]any) (mcp.CallToolResult, error) {
-			storeID, childID, err := requiredStoreChild(args, childField)
+			profile, err := b.profile(args)
+			if err != nil {
+				return mcp.CallToolResult{}, err
+			}
+			storeID, childID, err := b.storeChild(args, profile, childField)
 			if err != nil {
 				return mcp.CallToolResult{}, err
 			}
@@ -564,7 +625,7 @@ func (b toolBuilder) storeChildListTool(name, title, description, childField str
 			if err != nil {
 				return mcp.CallToolResult{}, err
 			}
-			return b.call(ctx, "GET", path(storeID, childID), query, nil)
+			return b.call(ctx, profile, "GET", path(storeID, childID), query, nil)
 		},
 	}
 }
@@ -578,12 +639,16 @@ func (b toolBuilder) storeBodyTool(name, title, description, method string, path
 		Name:        name,
 		Title:       title,
 		Description: description,
-		InputSchema: objectSchema([]string{"store_id", "body"}, map[string]any{
-			"store_id": stringProperty("PayNow store ID."),
+		InputSchema: objectSchema([]string{"body"}, map[string]any{
+			"store_id": stringProperty("PayNow store ID. Optional if the selected profile has store_id."),
 			"body":     bodyProperty("JSON request body."),
 		}),
 		Handler: func(ctx context.Context, args map[string]any) (mcp.CallToolResult, error) {
-			storeID, err := requiredString(args, "store_id")
+			profile, err := b.profile(args)
+			if err != nil {
+				return mcp.CallToolResult{}, err
+			}
+			storeID, err := b.storeID(args, profile)
 			if err != nil {
 				return mcp.CallToolResult{}, err
 			}
@@ -591,7 +656,7 @@ func (b toolBuilder) storeBodyTool(name, title, description, method string, path
 			if err != nil {
 				return mcp.CallToolResult{}, err
 			}
-			return b.call(ctx, method, path(storeID), nil, body)
+			return b.call(ctx, profile, method, path(storeID), nil, body)
 		},
 	}
 }
@@ -601,13 +666,17 @@ func (b toolBuilder) storeChildBodyTool(name, title, description, method, childF
 		Name:        name,
 		Title:       title,
 		Description: description,
-		InputSchema: objectSchema([]string{"store_id", childField, "body"}, map[string]any{
-			"store_id": stringProperty("PayNow store ID."),
+		InputSchema: objectSchema([]string{childField, "body"}, map[string]any{
+			"store_id": stringProperty("PayNow store ID. Optional if the selected profile has store_id."),
 			childField: stringProperty("PayNow " + strings.ReplaceAll(childField, "_", " ") + "."),
 			"body":     bodyProperty("JSON request body."),
 		}),
 		Handler: func(ctx context.Context, args map[string]any) (mcp.CallToolResult, error) {
-			storeID, childID, err := requiredStoreChild(args, childField)
+			profile, err := b.profile(args)
+			if err != nil {
+				return mcp.CallToolResult{}, err
+			}
+			storeID, childID, err := b.storeChild(args, profile, childField)
 			if err != nil {
 				return mcp.CallToolResult{}, err
 			}
@@ -615,17 +684,22 @@ func (b toolBuilder) storeChildBodyTool(name, title, description, method, childF
 			if err != nil {
 				return mcp.CallToolResult{}, err
 			}
-			return b.call(ctx, method, path(storeID, childID), nil, body)
+			return b.call(ctx, profile, method, path(storeID, childID), nil, body)
 		},
 	}
 }
 
 func (b toolBuilder) deleteTool(name, title, description, idField string, path func(string) string) mcp.Tool {
+	required := []string{idField, "confirm"}
+	if idField == "store_id" {
+		required = []string{"confirm"}
+	}
+
 	return mcp.Tool{
 		Name:        name,
 		Title:       title,
 		Description: description + " Requires confirm=true.",
-		InputSchema: objectSchema([]string{idField, "confirm"}, map[string]any{
+		InputSchema: objectSchema(required, map[string]any{
 			idField:   stringProperty("PayNow " + strings.ReplaceAll(idField, "_", " ") + "."),
 			"confirm": boolProperty("Must be true to delete."),
 		}),
@@ -633,11 +707,20 @@ func (b toolBuilder) deleteTool(name, title, description, idField string, path f
 			if err := requireConfirm(args, "confirm", "delete"); err != nil {
 				return mcp.CallToolResult{}, err
 			}
-			id, err := requiredString(args, idField)
+			profile, err := b.profile(args)
 			if err != nil {
 				return mcp.CallToolResult{}, err
 			}
-			return b.call(ctx, "DELETE", path(id), nil, nil)
+			var id string
+			if idField == "store_id" {
+				id, err = b.storeID(args, profile)
+			} else {
+				id, err = requiredString(args, idField)
+			}
+			if err != nil {
+				return mcp.CallToolResult{}, err
+			}
+			return b.call(ctx, profile, "DELETE", path(id), nil, nil)
 		},
 	}
 }
@@ -647,8 +730,8 @@ func (b toolBuilder) storeChildDeleteTool(name, title, description, childField s
 		Name:        name,
 		Title:       title,
 		Description: description + " Requires confirm=true.",
-		InputSchema: objectSchema([]string{"store_id", childField, "confirm"}, map[string]any{
-			"store_id": stringProperty("PayNow store ID."),
+		InputSchema: objectSchema([]string{childField, "confirm"}, map[string]any{
+			"store_id": stringProperty("PayNow store ID. Optional if the selected profile has store_id."),
 			childField: stringProperty("PayNow " + strings.ReplaceAll(childField, "_", " ") + "."),
 			"confirm":  boolProperty("Must be true to delete."),
 		}),
@@ -656,19 +739,23 @@ func (b toolBuilder) storeChildDeleteTool(name, title, description, childField s
 			if err := requireConfirm(args, "confirm", "delete"); err != nil {
 				return mcp.CallToolResult{}, err
 			}
-			storeID, childID, err := requiredStoreChild(args, childField)
+			profile, err := b.profile(args)
 			if err != nil {
 				return mcp.CallToolResult{}, err
 			}
-			return b.call(ctx, "DELETE", path(storeID, childID), nil, nil)
+			storeID, childID, err := b.storeChild(args, profile, childField)
+			if err != nil {
+				return mcp.CallToolResult{}, err
+			}
+			return b.call(ctx, profile, "DELETE", path(storeID, childID), nil, nil)
 		},
 	}
 }
 
 func (b toolBuilder) storeChildPostNoBodyTool(name, title, description, childField string, confirm bool, path func(string, string) string) mcp.Tool {
-	required := []string{"store_id", childField}
+	required := []string{childField}
 	props := map[string]any{
-		"store_id": stringProperty("PayNow store ID."),
+		"store_id": stringProperty("PayNow store ID. Optional if the selected profile has store_id."),
 		childField: stringProperty("PayNow " + strings.ReplaceAll(childField, "_", " ") + "."),
 	}
 	if confirm {
@@ -687,17 +774,62 @@ func (b toolBuilder) storeChildPostNoBodyTool(name, title, description, childFie
 					return mcp.CallToolResult{}, err
 				}
 			}
-			storeID, childID, err := requiredStoreChild(args, childField)
+			profile, err := b.profile(args)
 			if err != nil {
 				return mcp.CallToolResult{}, err
 			}
-			return b.call(ctx, "POST", path(storeID, childID), nil, nil)
+			storeID, childID, err := b.storeChild(args, profile, childField)
+			if err != nil {
+				return mcp.CallToolResult{}, err
+			}
+			return b.call(ctx, profile, "POST", path(storeID, childID), nil, nil)
 		},
 	}
 }
 
-func (b toolBuilder) call(ctx context.Context, method, path string, query map[string]any, body any) (mcp.CallToolResult, error) {
-	result, err := b.client.Do(ctx, method, path, query, body)
+func (b toolBuilder) profile(args map[string]any) (Profile, error) {
+	name := ""
+	if value, ok := args["profile"]; ok && value != nil {
+		text, ok := value.(string)
+		if !ok {
+			return Profile{}, fmt.Errorf("profile must be a string")
+		}
+		name = strings.TrimSpace(text)
+	}
+	return b.registry.Get(name)
+}
+
+func (b toolBuilder) storeID(args map[string]any, profile Profile) (string, error) {
+	if value, ok := args["store_id"]; ok && value != nil {
+		text, ok := value.(string)
+		if !ok {
+			return "", fmt.Errorf("store_id must be a string")
+		}
+		text = strings.TrimSpace(text)
+		if text != "" {
+			return text, nil
+		}
+	}
+	if profile.StoreID != "" {
+		return profile.StoreID, nil
+	}
+	return "", fmt.Errorf("store_id is required because profile %q has no store_id", profile.Name)
+}
+
+func (b toolBuilder) storeChild(args map[string]any, profile Profile, childField string) (string, string, error) {
+	storeID, err := b.storeID(args, profile)
+	if err != nil {
+		return "", "", err
+	}
+	childID, err := requiredString(args, childField)
+	if err != nil {
+		return "", "", err
+	}
+	return storeID, childID, nil
+}
+
+func (b toolBuilder) call(ctx context.Context, profile Profile, method, path string, query map[string]any, body any) (mcp.CallToolResult, error) {
+	result, err := profile.Client.Do(ctx, method, path, query, body)
 	if err != nil {
 		if apiErr, ok := err.(*APIError); ok {
 			return mcp.NewToolError(apiErr.Response), nil

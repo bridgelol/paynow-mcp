@@ -1,6 +1,13 @@
 package paynow
 
 func objectSchema(required []string, properties map[string]any) map[string]any {
+	if properties == nil {
+		properties = map[string]any{}
+	}
+	if _, ok := properties["profile"]; !ok {
+		properties["profile"] = stringProperty("Optional PayNow profile name from PAYNOW_PROFILES. Defaults to PAYNOW_DEFAULT_PROFILE.")
+	}
+
 	schema := map[string]any{
 		"type":                 "object",
 		"properties":           properties,

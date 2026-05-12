@@ -57,7 +57,7 @@ func ConfigFromEnv() Config {
 
 	authPrefix := strings.TrimSpace(os.Getenv("PAYNOW_AUTH_PREFIX"))
 	if authPrefix == "" {
-		authPrefix = "APIKey"
+		authPrefix = authPrefixFromKind(os.Getenv("PAYNOW_AUTH_KIND"))
 	}
 
 	return Config{
@@ -89,6 +89,17 @@ func NewClient(config Config) *Client {
 		baseURL:    strings.TrimRight(config.BaseURL, "/"),
 		userAgent:  config.UserAgent,
 		httpClient: &http.Client{Timeout: config.Timeout},
+	}
+}
+
+func authPrefixFromKind(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "customer":
+		return "Customer"
+	case "gameserver", "game_server", "game-server":
+		return "GameServer"
+	default:
+		return "APIKey"
 	}
 }
 

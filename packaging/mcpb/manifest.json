@@ -1,0 +1,120 @@
+{
+  "manifest_version": "0.3",
+  "name": "paynow-mcp",
+  "display_name": "PayNow MCP",
+  "version": "0.0.0",
+  "description": "Manage a PayNow store through the PayNow Management API.",
+  "long_description": "PayNow MCP exposes store-management tools for PayNow merchants, including stores, products, coupons, customers, orders, payments, subscriptions, webhooks, checkout sessions, and game servers.",
+  "author": {
+    "name": "bridgelol",
+    "url": "https://github.com/bridgelol"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bridgelol/paynow-mcp.git"
+  },
+  "homepage": "https://github.com/bridgelol/paynow-mcp",
+  "documentation": "https://github.com/bridgelol/paynow-mcp#readme",
+  "support": "https://github.com/bridgelol/paynow-mcp/issues",
+  "license": "MIT",
+  "privacy_policies": [
+    "https://paynow.gg/privacy-policy"
+  ],
+  "keywords": [
+    "paynow",
+    "payments",
+    "store",
+    "commerce",
+    "mcp"
+  ],
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32"
+    ]
+  },
+  "server": {
+    "type": "binary",
+    "entry_point": "server/paynow-mcp",
+    "mcp_config": {
+      "command": "${__dirname}${/}server${/}paynow-mcp",
+      "env": {
+        "PAYNOW_API_KEY": "${user_config.paynow_api_key}",
+        "PAYNOW_BASE_URL": "${user_config.paynow_base_url}",
+        "PAYNOW_STORE_ID": "${user_config.paynow_store_id}",
+        "PAYNOW_INCLUDE_APIS": "${user_config.paynow_include_apis}",
+        "PAYNOW_TIMEOUT_SECONDS": "${user_config.paynow_timeout_seconds}"
+      },
+      "platform_overrides": {
+        "win32": {
+          "command": "${__dirname}${/}server${/}paynow-mcp.exe"
+        }
+      }
+    }
+  },
+  "user_config": {
+    "paynow_api_key": {
+      "type": "string",
+      "title": "PayNow API Key",
+      "description": "A PayNow Management API key. You can enter the raw token or the full 'APIKey ...' value.",
+      "sensitive": true,
+      "required": true
+    },
+    "paynow_base_url": {
+      "type": "string",
+      "title": "PayNow Base URL",
+      "description": "Override the PayNow API base URL.",
+      "default": "https://api.paynow.gg",
+      "required": false
+    },
+    "paynow_store_id": {
+      "type": "string",
+      "title": "Default Store ID",
+      "description": "Optional default store ID for store-scoped tools.",
+      "required": false
+    },
+    "paynow_include_apis": {
+      "type": "string",
+      "title": "Included API Toolsets",
+      "description": "Comma-separated toolsets to expose: management, storefront, gameserver. Storefront and gameserver require matching token types.",
+      "default": "management",
+      "required": false
+    },
+    "paynow_timeout_seconds": {
+      "type": "number",
+      "title": "Timeout Seconds",
+      "description": "HTTP request timeout in seconds.",
+      "default": 30,
+      "min": 1,
+      "max": 300,
+      "required": false
+    }
+  },
+  "tools": [
+    {
+      "name": "paynow_help",
+      "description": "Show PayNow MCP capabilities and common API paths."
+    },
+    {
+      "name": "paynow_api_request",
+      "description": "Call any PayNow Management API endpoint."
+    },
+    {
+      "name": "paynow_list_stores",
+      "description": "List PayNow stores available to the API key."
+    },
+    {
+      "name": "paynow_list_products",
+      "description": "List products for a store."
+    },
+    {
+      "name": "paynow_list_orders",
+      "description": "List orders for a store."
+    },
+    {
+      "name": "paynow_create_checkout_session",
+      "description": "Create a checkout session for a store."
+    }
+  ],
+  "tools_generated": true
+}
